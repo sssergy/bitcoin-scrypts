@@ -1,1 +1,61 @@
-import osimport subprocessimport regexdef extract_wallet_addresses(wallet_file_path):    cmd = f"python pywallet.py -d --dont_check_walletversion --dumpformat=addr -w {wallet_file_path}"    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    decoded_stdout = result.stdout.decode('utf-8', errors='replace')    addresses = set(regex.findall(r'\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b', decoded_stdout))    return addressesdef traverse_folders_and_extract_addresses(start_directory, output_file):    all_addresses = set()        for root, _, files in os.walk(start_directory):        for file in files:            file_name, file_extension = os.path.splitext(file.lower())            if file_name == 'wallet' and file_extension:                wallet_path = os.path.join(root, file)                print(f'Processing file: {wallet_path}')                try:                    addresses = extract_wallet_addresses(wallet_path)                    all_addresses.update(addresses)                    save_addresses_to_file(all_addresses, output_file)                except Exception as e:                    print(f'Error processing file {wallet_path}: {e}')        return all_addressesdef save_addresses_to_file(addresses, output_file):    with open(output_file, 'w') as file:        for address in addresses:            file.write(f'{address}\n')if __name__ == '__main__':    starting_directory = '/root'    output_file_path = 'addresses.txt'    extracted_addresses = traverse_folders_and_extract_addresses(starting_directory, output_file_path)    print(f'All used addresses have been saved to {output_file_path}.')
+import os
+import sys
+import bitcoinrpc
+from bitcoinrpc.authproxy import AuthServiceProxy
+
+def get_rpc_connection():
+    rpc_user = "rpc_user"
+    rpc_password = "rpc_pass"
+    rpc_host = os.environ.get("BITCOIN_RPC_HOST", "127.0.0.1")
+    rpc_port = os.environ.get("BITCOIN_RPC_PORT", "8332")
+    
+    connection_url = f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}"
+    return AuthServiceProxy(connection_url)
+
+def extract_data(rpc_connection, start_block=0):
+    block_count = rpc_connection.getblockcount()
+    print(f"Block count: {block_count}")
+    
+    block_hashes = []
+    merkle_roots = []
+    tx_hashes = []
+    chainwork_values = []
+    
+    for i in range(start_block, block_count + 1):
+        try:
+            block_hash = rpc_connection.getblockhash(i)
+            block = rpc_connection.getblock(block_hash)
+            
+            block_hashes.append(block_hash)
+            merkle_roots.append(block["merkleroot"])
+            chainwork_values.append(block["chainwork"])
+            
+            for tx in block["tx"]:
+                tx_hashes.append(tx)
+
+            # Save data for every block
+            write_to_files(block_hashes, merkle_roots, tx_hashes, chainwork_values, start_block=i)
+            block_hashes.clear()
+            merkle_roots.clear()
+            tx_hashes.clear()
+            chainwork_values.clear()
+            
+            sys.stdout.write(f"\rProcessed block: {i}")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"\nError at block {i}: {e}")
+            break
+
+    return block_hashes, merkle_roots, tx_hashes, chainwork_values
+
+def write_to_files(block_hashes, merkle_roots, tx_hashes, chainwork_values, start_block=0):
+    with open("block_hashes.txt", "a") as hash_file, open("merkle_roots.txt", "a") as merkle_file, open("transaction_hashes.txt", "a") as tx_file, open("chainwork_values.txt", "a") as chainwork_file:
+        for block_hash, merkle_root, tx_hash, chainwork_value in zip(block_hashes, merkle_roots, tx_hashes, chainwork_values):
+            hash_file.write(f"{block_hash}\n")
+            merkle_file.write(f"{merkle_root}\n")
+            tx_file.write(f"{tx_hash}\n")
+            chainwork_file.write(f"{chainwork_value}\n")
+
+if __name__ == "__main__":
+    rpc_connection = get_rpc_connection()
+    block_hashes, merkle_roots, tx_hashes, chainwork_values = extract_data(rpc_connection)
